@@ -26,7 +26,7 @@ classifiers = [
 
 [project.urls]
 Homepage = "https://github.com/dolthub/doltlite"
-Source = "https://github.com/timsehn/doltlite-python"
+Source = "https://github.com/dolthub/doltlite-python"
 
 [tool.setuptools]
 package-dir = { "" = "src" }
