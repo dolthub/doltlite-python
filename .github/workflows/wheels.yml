@@ -1,14 +1,17 @@
 # Build platform wheels for doltlite. Each wheel bundles a libdoltlite
 # built from source by scripts/build-libdoltlite.sh.
 #
-# SKETCH: this gets you to "wheels build on every supported platform".
-# Tasks remaining before publishing:
-#   - Pin DOLTLITE_REF in scripts/build-libdoltlite.sh to a tagged release
-#   - Install build deps inside the manylinux container (tcl, etc.)
-#     via CIBW_BEFORE_ALL_LINUX if `configure && make` needs more than the
-#     default manylinux base image provides
-#   - Add a publish-to-PyPI job gated on tag pushes
-#   - Smoke test the built wheel (currently CIBW_TEST_COMMAND is unset)
+# Triggers:
+#   - push to main, PRs: build only (validate)
+#   - tag `v*`: build + publish to PyPI via trusted publisher
+#   - manual workflow_dispatch: build only
+#
+# One-time PyPI setup (see RELEASING.md):
+#   1. Create the `doltlite` project on PyPI by uploading the first wheel
+#      manually OR by configuring a "pending" trusted publisher.
+#   2. At https://pypi.org/manage/account/publishing/ add a trusted
+#      publisher with owner=dolthub, repo=doltlite-python,
+#      workflow=wheels.yml, environment=pypi.
 name: wheels
 
 on:
@@ -26,10 +29,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { os: macos-14,      arch: arm64,   cibw_archs: arm64 }
-          - { os: macos-13,      arch: x86_64,  cibw_archs: x86_64 }
-          - { os: ubuntu-latest, arch: x86_64,  cibw_archs: x86_64 }
-          - { os: ubuntu-24.04-arm, arch: aarch64, cibw_archs: aarch64 }
+          - { os: macos-14,          arch: arm64,   cibw_archs: arm64 }
+          - { os: macos-13,          arch: x86_64,  cibw_archs: x86_64 }
+          - { os: ubuntu-latest,     arch: x86_64,  cibw_archs: x86_64 }
+          - { os: ubuntu-24.04-arm,  arch: aarch64, cibw_archs: aarch64 }
 
     steps:
       - uses: actions/checkout@v4
@@ -37,12 +40,28 @@ jobs:
       - uses: pypa/cibuildwheel@v2.21
         env:
           CIBW_ARCHS: ${{ matrix.cibw_archs }}
-          # The before-build hook clones doltlite and runs configure+make;
-          # it must complete inside the manylinux container, so anything it
-          # needs (autoconf, tcl) has to be installed by CIBW_BEFORE_ALL_LINUX.
-          CIBW_BEFORE_ALL_LINUX: >
-            yum install -y tcl-devel zlib-devel ||
-            apt-get update && apt-get install -y tcl-dev zlib1g-dev
+          # Wheel content is identical across CPython versions (py3-none
+          # tag, see setup.py), so build for one Python and the resulting
+          # wheel covers them all.
+          CIBW_BUILD: "cp312-*"
+          # libdoltlite is bundled as package data and loaded via absolute
+          # path at runtime; auditwheel/delocate have nothing useful to
+          # do, and rewriting our wheel can break the loader's path
+          # assumptions.
+          CIBW_REPAIR_WHEEL_COMMAND: ""
+          # Build libdoltlite from source for each platform. On Linux this
+          # runs inside the manylinux container, so build deps go into
+          # CIBW_BEFORE_ALL_LINUX below.
+          CIBW_BEFORE_BUILD: bash scripts/build-libdoltlite.sh
+          # Smoke test: install the wheel into a clean venv and run a
+          # script that verifies dolt_* functions are wired up.
+          CIBW_TEST_COMMAND: "python {project}/tests/smoke.py"
+
+          # manylinux containers ship a minimal toolchain; doltlite's
+          # build needs gcc/make (already present), zlib, and tcl for
+          # configure. yum is available on AlmaLinux 8 (manylinux_2_28).
+          CIBW_BEFORE_ALL_LINUX: |
+            yum install -y zlib-devel tcl tcl-devel git
 
       - uses: actions/upload-artifact@v4
         with:
@@ -62,3 +81,24 @@ jobs:
         with:
           name: sdist
           path: dist/*.tar.gz
+
+  publish:
+    name: Publish to PyPI
+    needs: [build_wheels, build_sdist]
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/doltlite
+    permissions:
+      id-token: write   # required for trusted publisher OIDC exchange
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist
+          # Skip uploads of files that already exist (idempotent re-runs).
+          skip-existing: true
