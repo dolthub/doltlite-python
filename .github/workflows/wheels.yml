@@ -49,11 +49,16 @@ jobs:
           # tag, see setup.py), so build for one Python and the resulting
           # wheel covers them all.
           CIBW_BUILD: "cp312-*"
-          # libdoltlite is bundled as package data and loaded via absolute
-          # path at runtime; auditwheel/delocate have nothing useful to
-          # do, and rewriting our wheel can break the loader's path
-          # assumptions.
-          CIBW_REPAIR_WHEEL_COMMAND: ""
+          # macOS: skip delocate. Our wheel ships libdoltlite as package
+          # data loaded via absolute path; delocate has nothing useful to
+          # do, and rewriting libdoltlite's install_name could collide
+          # with the loader's runtime shim. The default macosx_*_<arch>
+          # tag setuptools picks is already PyPI-acceptable.
+          CIBW_REPAIR_WHEEL_COMMAND_MACOS: ""
+          # Linux: keep the default auditwheel repair. We don't need it
+          # to bundle deps (libdoltlite only links libc / libpthread),
+          # but auditwheel also renames bare `linux_*` tags to the
+          # appropriate `manylinux_*_<arch>` — which PyPI requires.
           # Build libdoltlite from source for each platform. On Linux this
           # runs inside the manylinux container, so build deps go into
           # CIBW_BEFORE_ALL_LINUX below.
