@@ -25,8 +25,12 @@ gains `dolt_commit`, `dolt_branch`, `dolt_merge`, `dolt_log`,
 pip install doltlite
 ```
 
-Wheels bundle a precompiled `libdoltlite` for macOS (arm64, x86_64) and
-Linux (x86_64, aarch64). No system-level setup required.
+Wheels bundle a precompiled `libdoltlite` for macOS (arm64) and Linux
+(x86_64, aarch64). No system-level setup required.
+
+Intel Mac wheels aren't shipped in v0.11.x — GitHub's free-tier
+macos-13 runners queue for hours and block releases. Intel Mac users
+should build libdoltlite locally and use the `DOLTLITE_LIB` path below.
 
 For development against a local checkout of doltlite, point
 `DOLTLITE_LIB` at your built library instead:

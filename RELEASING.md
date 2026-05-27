@@ -68,8 +68,12 @@ publisher is wired up forever (modulo PyPI policy changes).
    downloads them and pushes to PyPI via the trusted publisher.
 
 5. Verify on PyPI: <https://pypi.org/project/doltlite/> should show the
-   new version with wheels for `macosx_*_arm64`, `macosx_*_x86_64`,
+   new version with wheels for `macosx_*_arm64`,
    `manylinux_*_x86_64`, and `manylinux_*_aarch64`.
+
+   Intel Mac (`macosx_*_x86_64`) is intentionally excluded — see the
+   `build_wheels` matrix comment in `.github/workflows/wheels.yml`.
+   Re-enable when GitHub's macos-13 runner scheduling improves.
 
 ## Troubleshooting
 
