@@ -1,0 +1,64 @@
+# Build platform wheels for doltlite. Each wheel bundles a libdoltlite
+# built from source by scripts/build-libdoltlite.sh.
+#
+# SKETCH: this gets you to "wheels build on every supported platform".
+# Tasks remaining before publishing:
+#   - Pin DOLTLITE_REF in scripts/build-libdoltlite.sh to a tagged release
+#   - Install build deps inside the manylinux container (tcl, etc.)
+#     via CIBW_BEFORE_ALL_LINUX if `configure && make` needs more than the
+#     default manylinux base image provides
+#   - Add a publish-to-PyPI job gated on tag pushes
+#   - Smoke test the built wheel (currently CIBW_TEST_COMMAND is unset)
+name: wheels
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build_wheels:
+    name: ${{ matrix.os }} ${{ matrix.arch }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: macos-14,      arch: arm64,   cibw_archs: arm64 }
+          - { os: macos-13,      arch: x86_64,  cibw_archs: x86_64 }
+          - { os: ubuntu-latest, arch: x86_64,  cibw_archs: x86_64 }
+          - { os: ubuntu-24.04-arm, arch: aarch64, cibw_archs: aarch64 }
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pypa/cibuildwheel@v2.21
+        env:
+          CIBW_ARCHS: ${{ matrix.cibw_archs }}
+          # The before-build hook clones doltlite and runs configure+make;
+          # it must complete inside the manylinux container, so anything it
+          # needs (autoconf, tcl) has to be installed by CIBW_BEFORE_ALL_LINUX.
+          CIBW_BEFORE_ALL_LINUX: >
+            yum install -y tcl-devel zlib-devel ||
+            apt-get update && apt-get install -y tcl-dev zlib1g-dev
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-${{ matrix.os }}-${{ matrix.arch }}
+          path: wheelhouse/*.whl
+
+  build_sdist:
+    name: Source distribution
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pipx run build --sdist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sdist
+          path: dist/*.tar.gz

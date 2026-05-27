@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+build/
+dist/
+wheelhouse/
+.eggs/
+
+# Bundled native lib (built via scripts/build-libdoltlite.sh)
+src/doltlite/_lib/libdoltlite.dylib
+src/doltlite/_lib/libdoltlite.so
+
+.DS_Store

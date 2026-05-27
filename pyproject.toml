@@ -1,0 +1,58 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "doltlite"
+version = "0.1.0"
+description = "Python loader for doltlite — Dolt version control through SQLite's drop-in API."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "Apache-2.0" }
+authors = [
+    { name = "DoltHub", email = "tim@dolthub.com" },
+]
+keywords = ["dolt", "doltlite", "sqlite", "version-control", "database"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Topic :: Database",
+]
+
+[project.urls]
+Homepage = "https://github.com/dolthub/doltlite"
+Source = "https://github.com/timsehn/doltlite-python"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+doltlite = ["_lib/libdoltlite.dylib", "_lib/libdoltlite.so"]
+
+# Forces wheels to be tagged as platform-specific so we don't accidentally
+# upload a wheel that bundles a macOS dylib but claims to be pure-python.
+[tool.setuptools.exclude-package-data]
+doltlite = ["_lib/.gitkeep"]
+
+# --- cibuildwheel ---
+# Each platform builds libdoltlite from source via before-build, then bundles
+# the resulting library as package data. See .github/workflows/wheels.yml.
+[tool.cibuildwheel]
+build = "cp39-* cp310-* cp311-* cp312-* cp313-*"
+skip = "*-musllinux_* *-win_* *-manylinux_i686"
+build-frontend = "build"
+before-build = "bash scripts/build-libdoltlite.sh"
+
+[tool.cibuildwheel.macos]
+archs = ["arm64", "x86_64"]
+
+[tool.cibuildwheel.linux]
+archs = ["x86_64", "aarch64"]
