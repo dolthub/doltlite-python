@@ -56,6 +56,13 @@ jobs:
           # Smoke test: install the wheel into a clean venv and run a
           # script that verifies dolt_* functions are wired up.
           CIBW_TEST_COMMAND: "python {project}/tests/smoke.py"
+          # cibuildwheel's macOS Python (python.org-style framework
+          # build) statically links SQLite into _sqlite3.so — same case
+          # as python-build-standalone. Our loader has no library
+          # reference to redirect. The build is unaffected; we run the
+          # macOS smoke test in a separate job below using Homebrew
+          # Python (which has dynamic _sqlite3).
+          CIBW_TEST_SKIP: "*-macosx_*"
 
           # manylinux containers ship a minimal toolchain; doltlite's
           # build needs gcc/make (already present), zlib, and tcl for
@@ -82,9 +89,46 @@ jobs:
           name: sdist
           path: dist/*.tar.gz
 
+  smoke_macos:
+    # Runs against the macOS runner's preinstalled Homebrew Python,
+    # which links _sqlite3 to a separate libsqlite3.dylib — exactly the
+    # case the loader targets. cibuildwheel can't run this test inline
+    # because its bundled Python is framework-style (libsqlite3
+    # statically linked into _sqlite3.so).
+    name: macOS smoke (${{ matrix.arch }})
+    needs: build_wheels
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: macos-14, arch: arm64,  brew_prefix: /opt/homebrew }
+          - { os: macos-13, arch: x86_64, brew_prefix: /usr/local }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: wheels-${{ matrix.os }}-${{ matrix.arch }}
+          path: wheelhouse
+      - name: Install wheel into Homebrew-Python venv
+        run: |
+          set -euxo pipefail
+          # GitHub-hosted runners ship multiple Homebrew Pythons under
+          # python@3.x; pick the newest that exists.
+          PY=""
+          for v in 3.13 3.12 3.11 3.10; do
+            cand="${{ matrix.brew_prefix }}/opt/python@$v/bin/python$v"
+            [ -x "$cand" ] && PY="$cand" && break
+          done
+          [ -n "$PY" ] || { echo "No Homebrew Python found"; exit 1; }
+          echo "Using $PY"
+          "$PY" -m venv venv
+          venv/bin/pip install wheelhouse/*.whl
+          venv/bin/python tests/smoke.py
+
   publish:
     name: Publish to PyPI
-    needs: [build_wheels, build_sdist]
+    needs: [build_wheels, build_sdist, smoke_macos]
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     environment:
