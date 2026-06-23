@@ -15,7 +15,7 @@ set -euo pipefail
 DOLTLITE_REPO="${DOLTLITE_REPO:-https://github.com/dolthub/doltlite}"
 # Pinned to the libdoltlite release that this doltlite-python version
 # bundles. Bump in lockstep with the package version in pyproject.toml.
-DOLTLITE_REF="${DOLTLITE_REF:-v0.11.15}"
+DOLTLITE_REF="${DOLTLITE_REF:-v0.11.16}"
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 LIB_OUT_DIR="$REPO_ROOT/src/doltlite/_lib"
