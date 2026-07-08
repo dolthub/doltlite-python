@@ -6,8 +6,8 @@ build-backend = "setuptools.build_meta"
 name = "doltlite"
 # Tracks the bundled libdoltlite release. Bump in lockstep with
 # DOLTLITE_REF in scripts/build-libdoltlite.sh. Loader-only fixes between
-# libdoltlite releases use post-releases: 0.11.26.post1, 0.11.26.post2, etc.
-version = "0.11.26"
+# libdoltlite releases use post-releases: 0.11.27.post1, 0.11.27.post2, etc.
+version = "0.11.27"
 description = "Python loader for doltlite — Dolt version control through SQLite's drop-in API."
 readme = "README.md"
 requires-python = ">=3.9"
