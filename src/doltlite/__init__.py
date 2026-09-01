@@ -20,4 +20,4 @@ from ._loader import bootstrap, libdoltlite_path
 bootstrap()
 
 __all__ = ["bootstrap", "libdoltlite_path"]
-__version__ = "0.50.1"
+__version__ = "0.50.2"
