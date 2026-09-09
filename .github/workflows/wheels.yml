@@ -122,14 +122,32 @@ jobs:
       - name: Install wheel into Homebrew-Python venv
         run: |
           set -euxo pipefail
-          # GitHub-hosted runners ship multiple Homebrew Pythons under
-          # python@3.x; pick the newest that exists.
+          # Homebrew Python dynamically links _sqlite3 — that's the
+          # interpreter this smoke test is for. Ask brew first so we
+          # track whatever version the runner image currently ships
+          # (3.14 on macos-14 as of 20260831), then fall back to the
+          # old python@3.x keg scan.
           PY=""
-          for v in 3.13 3.12 3.11 3.10; do
-            cand="${{ matrix.brew_prefix }}/opt/python@$v/bin/python$v"
-            [ -x "$cand" ] && PY="$cand" && break
-          done
-          [ -n "$PY" ] || { echo "No Homebrew Python found"; exit 1; }
+          if command -v brew >/dev/null 2>&1; then
+            prefix="$(brew --prefix python 2>/dev/null || true)"
+            if [ -n "$prefix" ]; then
+              for cand in "$prefix/bin/python3" "$prefix/bin"/python3.*; do
+                [ -x "$cand" ] && PY="$cand" && break
+              done
+            fi
+          fi
+          if [ -z "$PY" ]; then
+            for v in 3.14 3.13 3.12 3.11 3.10; do
+              cand="${{ matrix.brew_prefix }}/opt/python@$v/bin/python$v"
+              [ -x "$cand" ] && PY="$cand" && break
+            done
+          fi
+          if [ -z "$PY" ]; then
+            echo "No Homebrew Python found under ${{ matrix.brew_prefix }}"
+            ls -la "${{ matrix.brew_prefix }}/opt"/python* 2>/dev/null || true
+            ls -la "${{ matrix.brew_prefix }}/bin"/python* 2>/dev/null || true
+            exit 1
+          fi
           echo "Using $PY"
           "$PY" -m venv venv
           venv/bin/pip install wheelhouse/*.whl
