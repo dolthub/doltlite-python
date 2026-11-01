@@ -4,7 +4,7 @@
 # Triggers:
 #   - push to main, PRs: build only (validate)
 #   - tag `v*`: build + publish to PyPI via trusted publisher
-#   - manual workflow_dispatch: build only
+#   - manual workflow_dispatch: build, with optional PyPI publication
 #
 # One-time PyPI setup (see RELEASING.md):
 #   1. Create the `doltlite` project on PyPI by uploading the first wheel
@@ -20,6 +20,11 @@ on:
     tags: ["v*"]
   pull_request:
   workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish the current package version to PyPI
+        type: boolean
+        default: false
 
 jobs:
   build_wheels:
@@ -29,7 +34,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { os: macos-14,          arch: arm64,   cibw_archs: arm64 }
+          - { os: macos-15,          arch: arm64,   cibw_archs: arm64 }
           - { os: ubuntu-latest,     arch: x86_64,  cibw_archs: x86_64 }
           - { os: ubuntu-24.04-arm,  arch: aarch64, cibw_archs: aarch64 }
           # Intel Mac (macos-13) intentionally omitted: GitHub's free-tier
@@ -112,7 +117,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { os: macos-14, arch: arm64,  brew_prefix: /opt/homebrew }
+          - { os: macos-15, arch: arm64,  brew_prefix: /opt/homebrew }
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
@@ -125,8 +130,7 @@ jobs:
           # Homebrew Python dynamically links _sqlite3 — that's the
           # interpreter this smoke test is for. Ask brew first so we
           # track whatever version the runner image currently ships
-          # (3.14 on macos-14 as of 20260831), then fall back to the
-          # old python@3.x keg scan.
+          # then fall back to the old python@3.x keg scan.
           PY=""
           if command -v brew >/dev/null 2>&1; then
             prefix="$(brew --prefix python 2>/dev/null || true)"
@@ -156,7 +160,9 @@ jobs:
   publish:
     name: Publish to PyPI
     needs: [build_wheels, build_sdist, smoke_macos]
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    if: >-
+      (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) ||
+      (github.event_name == 'workflow_dispatch' && inputs.publish)
     runs-on: ubuntu-latest
     environment:
       name: pypi
