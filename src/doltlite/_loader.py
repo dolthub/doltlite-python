@@ -25,6 +25,7 @@ Strategy by platform:
 from __future__ import annotations
 
 import ctypes
+import hashlib
 import os
 import shutil
 import subprocess
@@ -179,8 +180,10 @@ def _build_macos_shim(lib: str) -> str:
     `_sqlite3.so` was linked against. The shim is cached under $TMPDIR
     keyed by (lib path, mtime, target install_name)."""
     install_name = _detect_sqlite3_install_name()
+    lib = str(Path(lib).resolve())
     src_stat = os.stat(lib)
-    key = f"{abs(hash((lib, src_stat.st_mtime_ns, install_name))):016x}"
+    identity = f"{lib}\0{src_stat.st_mtime_ns}\0{install_name}"
+    key = hashlib.sha256(os.fsencode(identity)).hexdigest()[:16]
     cache_dir = Path(tempfile.gettempdir()) / f"doltlite-shim-{key}"
     shim = cache_dir / "libsqlite3.dylib"
 
@@ -188,20 +191,23 @@ def _build_macos_shim(lib: str) -> str:
         return str(shim)
 
     cache_dir.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(lib, shim)
-    try:
-        subprocess.run(
-            ["install_name_tool", "-id", install_name, str(shim)],
-            check=True, capture_output=True, text=True,
-        )
-    except FileNotFoundError as e:
-        raise DoltliteLoadError(
-            "install_name_tool is required on macOS. Install Xcode "
-            "Command Line Tools (`xcode-select --install`)."
-        ) from e
-    except subprocess.CalledProcessError as e:
-        raise DoltliteLoadError(
-            f"install_name_tool failed for {shim}: {e.stderr}"
-        ) from e
+    with tempfile.TemporaryDirectory(prefix=".build-", dir=cache_dir) as staging:
+        staged = Path(staging) / shim.name
+        shutil.copyfile(lib, staged)
+        try:
+            subprocess.run(
+                ["install_name_tool", "-id", install_name, str(staged)],
+                check=True, capture_output=True, text=True,
+            )
+        except FileNotFoundError as e:
+            raise DoltliteLoadError(
+                "install_name_tool is required on macOS. Install Xcode "
+                "Command Line Tools (`xcode-select --install`)."
+            ) from e
+        except subprocess.CalledProcessError as e:
+            raise DoltliteLoadError(
+                f"install_name_tool failed for {shim}: {e.stderr}"
+            ) from e
+        os.replace(staged, shim)
 
     return str(shim)

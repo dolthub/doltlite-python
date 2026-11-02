@@ -47,6 +47,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Test loader cache
+        run: python3 -m unittest discover -s tests -p 'test_*.py'
+
       - uses: pypa/cibuildwheel@v2.21
         env:
           CIBW_ARCHS: ${{ matrix.cibw_archs }}
@@ -156,6 +159,7 @@ jobs:
           "$PY" -m venv venv
           venv/bin/pip install wheelhouse/*.whl
           venv/bin/python tests/smoke.py
+          venv/bin/python tests/macos_shim_smoke.py
 
   publish:
     name: Publish to PyPI
