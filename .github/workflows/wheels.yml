@@ -71,8 +71,6 @@ jobs:
           # runs inside the manylinux container, so build deps go into
           # CIBW_BEFORE_ALL_LINUX below.
           CIBW_BEFORE_BUILD: bash scripts/build-libdoltlite.sh
-          # Smoke test: install the wheel into a clean venv and run a
-          # script that verifies dolt_* functions are wired up.
           CIBW_TEST_COMMAND: "python {project}/tests/smoke.py"
           # cibuildwheel's macOS Python (python.org-style framework
           # build) statically links SQLite into _sqlite3.so — same case
@@ -161,9 +159,54 @@ jobs:
           venv/bin/python tests/smoke.py
           venv/bin/python tests/macos_shim_smoke.py
 
+  smoke_linux:
+    name: Linux installed wheel and sdist
+    needs: [build_wheels, build_sdist]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.9.15"
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: wheels-ubuntu-latest-x86_64
+          path: wheelhouse
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: sdist
+          path: dist
+
+      - name: Test the wheel with a uv venv using distro Python
+        run: |
+          venv="$RUNNER_TEMP/shared-sqlite"
+          uv venv --no-managed-python --python /usr/bin/python3 "$venv"
+          uv pip install --python "$venv/bin/python" wheelhouse/*.whl
+          "$venv/bin/python" tests/smoke.py
+
+      - name: Test the wheel with uv's statically linked Python
+        run: |
+          venv="$RUNNER_TEMP/standalone"
+          uv python install 3.12.12
+          uv venv --managed-python --python 3.12.12 "$venv"
+          uv pip install --python "$venv/bin/python" wheelhouse/*.whl
+          "$venv/bin/python" tests/smoke.py --reject-standalone
+
+      - name: Install the sdist with an explicit matching native library
+        run: |
+          library="$RUNNER_TEMP/native-wheel"
+          /usr/bin/python3 -m zipfile -e wheelhouse/*.whl "$library"
+          venv="$RUNNER_TEMP/from-sdist"
+          uv venv --no-managed-python --python /usr/bin/python3 "$venv"
+          uv pip install --python "$venv/bin/python" dist/*.tar.gz
+          DOLTLITE_LIB="$library/doltlite/_lib/libdoltlite.so" "$venv/bin/python" tests/smoke.py
+
   publish:
     name: Publish to PyPI
-    needs: [build_wheels, build_sdist, smoke_macos]
+    needs: [build_wheels, build_sdist, smoke_macos, smoke_linux]
     if: >-
       (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) ||
       (github.event_name == 'workflow_dispatch' && inputs.publish)

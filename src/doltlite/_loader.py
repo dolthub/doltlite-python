@@ -24,6 +24,7 @@ Strategy by platform:
 """
 from __future__ import annotations
 
+from contextlib import closing
 import ctypes
 import hashlib
 import os
@@ -36,6 +37,11 @@ from typing import Optional
 
 
 _BOOTSTRAP_MARKER = "_DOLTLITE_BOOTSTRAPPED"
+_SHARED_SQLITE_HINT = (
+    "DoltLite needs a Python interpreter that dynamically links libsqlite3. "
+    "With uv, select one explicitly using uv venv --python /path/to/python."
+)
+_bootstrapped = False
 _PKG_LIB_DIR = Path(__file__).resolve().parent / "_lib"
 
 
@@ -75,10 +81,6 @@ def libdoltlite_path() -> str:
     )
 
 
-def _is_bootstrapped() -> bool:
-    return os.environ.get(_BOOTSTRAP_MARKER) == "1"
-
-
 def _sqlite3_already_imported() -> bool:
     return "sqlite3" in sys.modules or "_sqlite3" in sys.modules
 
@@ -86,33 +88,49 @@ def _sqlite3_already_imported() -> bool:
 def bootstrap() -> None:
     """Make libdoltlite the active SQLite engine for this interpreter.
 
-    Idempotent: subsequent calls (and re-entrant calls after a re-exec)
-    are no-ops. Raises `DoltliteLoadError` if the library can't be found
+    Subsequent calls in the same process are no-ops after verification.
+    Raises `DoltliteLoadError` if the library can't be found
     or if a re-exec is needed but `sys.argv` does not name a script we
-    can replay (interactive shell, `python -c …`, REPL, notebook).
+    can replay (interactive shell, `python -c …`, REPL, notebook), or
+    when Python still resolves sqlite3 to another engine.
     """
-    if _is_bootstrapped():
+    global _bootstrapped
+    if _bootstrapped:
         return
 
-    lib = libdoltlite_path()
+    if os.environ.pop(_BOOTSTRAP_MARKER, None) != "1":
+        lib = libdoltlite_path()
+        if sys.platform != "darwin" and not _sqlite3_already_imported():
+            ctypes.CDLL(lib, mode=ctypes.RTLD_GLOBAL)
+        else:
+            _reexec(lib)
 
-    if sys.platform != "darwin" and not _sqlite3_already_imported():
-        ctypes.CDLL(lib, mode=ctypes.RTLD_GLOBAL)
-        os.environ[_BOOTSTRAP_MARKER] = "1"
-        return
+    _verify_engine()
+    _bootstrapped = True
 
+
+def _reexec(lib: str) -> None:
     _require_replayable_argv()
-
-    env = dict(os.environ)
-    env[_BOOTSTRAP_MARKER] = "1"
-
+    env = dict(os.environ, **{_BOOTSTRAP_MARKER: "1"})
     if sys.platform == "darwin":
         env["DYLD_INSERT_LIBRARIES"] = _build_macos_shim(lib)
     else:
         existing = env.get("LD_PRELOAD", "").strip()
         env["LD_PRELOAD"] = f"{lib} {existing}".strip()
-
     os.execvpe(sys.executable, [sys.executable, *sys.argv], env)
+
+
+def _verify_engine() -> None:
+    import sqlite3
+
+    message = f"Could not activate DoltLite as Python's sqlite3 engine. {_SHARED_SQLITE_HINT}"
+    try:
+        with closing(sqlite3.connect(":memory:")) as db:
+            engine = db.execute("SELECT doltlite_engine()").fetchone()
+    except sqlite3.Error as error:
+        raise DoltliteLoadError(message) from error
+    if engine != ("prolly",):
+        raise DoltliteLoadError(message)
 
 
 def _require_replayable_argv() -> None:
@@ -148,21 +166,26 @@ def _require_replayable_argv() -> None:
     )
 
 
+def _run_macos_tool(*command: str) -> subprocess.CompletedProcess[str]:
+    env = os.environ.copy()
+    env.pop("DYLD_INSERT_LIBRARIES", None)
+    return subprocess.run(command, env=env, check=True, capture_output=True, text=True)
+
+
 def _detect_sqlite3_install_name() -> str:
     """On macOS, return the libsqlite3 path that the active interpreter's
     `_sqlite3` extension was linked against."""
     import _sqlite3
 
     try:
-        out = subprocess.run(
-            ["otool", "-L", _sqlite3.__file__],
-            check=True, capture_output=True, text=True,
-        ).stdout
+        out = _run_macos_tool("otool", "-L", _sqlite3.__file__).stdout
     except FileNotFoundError as e:
         raise DoltliteLoadError(
             "otool is required on macOS to detect the active "
             "libsqlite3 path. Install Xcode Command Line Tools."
         ) from e
+    except subprocess.CalledProcessError as e:
+        raise DoltliteLoadError(f"otool failed for {_sqlite3.__file__}: {e} {e.stderr}") from e
 
     for line in out.splitlines():
         token = line.strip().split(" ", 1)[0]
@@ -171,7 +194,7 @@ def _detect_sqlite3_install_name() -> str:
 
     raise DoltliteLoadError(
         "Could not find a libsqlite3 dependency in "
-        f"{_sqlite3.__file__}. Output of otool -L:\n{out}"
+        f"{_sqlite3.__file__}. {_SHARED_SQLITE_HINT} Output of otool -L:\n{out}"
     )
 
 
@@ -195,10 +218,7 @@ def _build_macos_shim(lib: str) -> str:
         staged = Path(staging) / shim.name
         shutil.copyfile(lib, staged)
         try:
-            subprocess.run(
-                ["install_name_tool", "-id", install_name, str(staged)],
-                check=True, capture_output=True, text=True,
-            )
+            _run_macos_tool("install_name_tool", "-id", install_name, str(staged))
         except FileNotFoundError as e:
             raise DoltliteLoadError(
                 "install_name_tool is required on macOS. Install Xcode "
