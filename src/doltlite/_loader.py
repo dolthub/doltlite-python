@@ -24,6 +24,7 @@ Strategy by platform:
 """
 from __future__ import annotations
 
+from contextlib import closing
 import ctypes
 import hashlib
 import os
@@ -36,6 +37,11 @@ from typing import Optional
 
 
 _BOOTSTRAP_MARKER = "_DOLTLITE_BOOTSTRAPPED"
+_SHARED_SQLITE_HINT = (
+    "DoltLite needs a Python interpreter that dynamically links libsqlite3. "
+    "With uv, select one explicitly using uv venv --python /path/to/python."
+)
+_bootstrapped = False
 _PKG_LIB_DIR = Path(__file__).resolve().parent / "_lib"
 
 
@@ -75,10 +81,6 @@ def libdoltlite_path() -> str:
     )
 
 
-def _is_bootstrapped() -> bool:
-    return os.environ.get(_BOOTSTRAP_MARKER) == "1"
-
-
 def _sqlite3_already_imported() -> bool:
     return "sqlite3" in sys.modules or "_sqlite3" in sys.modules
 
@@ -89,31 +91,46 @@ def bootstrap() -> None:
     Idempotent: subsequent calls (and re-entrant calls after a re-exec)
     are no-ops. Raises `DoltliteLoadError` if the library can't be found
     or if a re-exec is needed but `sys.argv` does not name a script we
-    can replay (interactive shell, `python -c …`, REPL, notebook).
+    can replay (interactive shell, `python -c …`, REPL, notebook), or
+    when Python still resolves sqlite3 to another engine.
     """
-    if _is_bootstrapped():
+    global _bootstrapped
+    if _bootstrapped:
         return
 
-    lib = libdoltlite_path()
+    if os.environ.pop(_BOOTSTRAP_MARKER, None) != "1":
+        lib = libdoltlite_path()
+        if sys.platform != "darwin" and not _sqlite3_already_imported():
+            ctypes.CDLL(lib, mode=ctypes.RTLD_GLOBAL)
+        else:
+            _reexec(lib)
 
-    if sys.platform != "darwin" and not _sqlite3_already_imported():
-        ctypes.CDLL(lib, mode=ctypes.RTLD_GLOBAL)
-        os.environ[_BOOTSTRAP_MARKER] = "1"
-        return
+    _verify_engine()
+    _bootstrapped = True
 
+
+def _reexec(lib: str) -> None:
     _require_replayable_argv()
-
-    env = dict(os.environ)
-    env[_BOOTSTRAP_MARKER] = "1"
-
+    env = dict(os.environ, **{_BOOTSTRAP_MARKER: "1"})
     if sys.platform == "darwin":
         env["DYLD_INSERT_LIBRARIES"] = _build_macos_shim(lib)
     else:
         existing = env.get("LD_PRELOAD", "").strip()
         env["LD_PRELOAD"] = f"{lib} {existing}".strip()
-
     os.execvpe(sys.executable, [sys.executable, *sys.argv], env)
 
+
+def _verify_engine() -> None:
+    import sqlite3
+
+    message = f"Could not activate DoltLite as Python's sqlite3 engine. {_SHARED_SQLITE_HINT}"
+    try:
+        with closing(sqlite3.connect(":memory:")) as db:
+            engine = db.execute("SELECT doltlite_engine()").fetchone()
+    except sqlite3.Error as error:
+        raise DoltliteLoadError(message) from error
+    if engine != ("prolly",):
+        raise DoltliteLoadError(message)
 
 def _require_replayable_argv() -> None:
     """Bail out clearly if we can't safely re-exec the current process.
@@ -171,7 +188,7 @@ def _detect_sqlite3_install_name() -> str:
 
     raise DoltliteLoadError(
         "Could not find a libsqlite3 dependency in "
-        f"{_sqlite3.__file__}. Output of otool -L:\n{out}"
+        f"{_sqlite3.__file__}. {_SHARED_SQLITE_HINT} Output of otool -L:\n{out}"
     )
 
 
