@@ -122,6 +122,22 @@ class MacosShimTests(unittest.TestCase):
         self.assertEqual(list(self.cache.rglob("libsqlite3.dylib")), [])
         self.assertEqual(self.worker()[1], "library:patched")
 
+    def test_macos_tools_do_not_inherit_the_shim(self):
+        def run(command, *, env=None, **kwargs):
+            tool_env = os.environ if env is None else env
+            if "DYLD_INSERT_LIBRARIES" in tool_env:
+                raise subprocess.CalledProcessError(-6, command)
+            output = f"\t{INSTALL_NAME} (compatibility version 1.0.0)\n"
+            return subprocess.CompletedProcess(command, 0, stdout=output)
+
+        with mock.patch.dict(os.environ, DYLD_INSERT_LIBRARIES=str(self.lib)), \
+                mock.patch.object(loader.tempfile, "gettempdir", return_value=str(self.cache)), \
+                mock.patch.object(loader.subprocess, "run", side_effect=run) as tools:
+            loader._build_macos_shim(str(self.lib))
+            self.assertEqual(os.environ["DYLD_INSERT_LIBRARIES"], str(self.lib))
+        self.assertEqual([call.args[0][0] for call in tools.call_args_list],
+                         ["otool", "install_name_tool"])
+
     def test_concurrent_start_cannot_reuse_unfinished_shim(self):
         ready = self.root / "ready"
         release = self.root / "release"
